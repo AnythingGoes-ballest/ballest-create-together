@@ -10,4 +10,4 @@ Edit one Ballest map with friends.
   leave and come back.
 - Everyone's undo and redo are their own.
 - It runs on the editor's own networking over Steam (Steam's relay, no open ports). Requires the plugin manager host
-  0.34.1.
+  0.34.4.
