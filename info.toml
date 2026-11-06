@@ -1,6 +1,6 @@
 [meta]
 name = "Create Together"
-version = "0.1.1"
+version = "0.1.2"
 author = "AnythingGoes"
 description = "Edit one map with friends: a create together page in the Create menu lists open sessions, joins one by its code or starts your own from a new map or one of yours (public, friends, code only or invite only). The editor's own networking keeps every piece in sync, over Steam."
 min_host = "0.34.1"

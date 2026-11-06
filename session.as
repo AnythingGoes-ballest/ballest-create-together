@@ -9,7 +9,7 @@
 //   vis (public / friends / code / invite), ch (a lookup key made from the code: never the code itself), and addr
 //   (where the editor is, set only once the editor listens; a joiner checks it is the lobby owner's).
 
-const string VERSION = "0.1.1";
+const string VERSION = "0.1.2";
 
 namespace Session
 {
@@ -342,7 +342,7 @@ void Update()
             // by code: only a session whose host knows the code (it answers this player's proof)
             if (joinCode != "" && !Together::CodeAccepted())
             {
-                if (waited > 12)
+                if (waited > 20)            // the host answers in a moment; Steam's lobby chat can be slow
                 {
                     Together::LeaveLobby();
                     if (!TryNextCandidate())
