@@ -30,7 +30,9 @@ Phase phase = Idle;
 string message;                 // what happened last, for the page ("" for nothing)
 bool messageBad = false;
 double messageAt = 0;
-string notice;                  // something the player must see wherever they are (the notice window)
+array<string> notices;          // what the player must see wherever they are (the notice window), oldest first
+string pendingInvite;           // an invite that came while the player was editing a map of their own
+bool hostSaid = false;          // the host (DLL) already told the player why their session is over
 double phaseSince = 0;
 double endingSince = -1;        // the session looked over at this time (it must stay so for a moment)
 bool openTab = false;           // the editor's together tab opens once, when a session starts
@@ -46,6 +48,8 @@ string joinId;
 
 void Set(Phase p)
 {
+    if (p == Hosting || p == JoiningLobby || p == CreatingLobby)
+        hostSaid = false;
     phase = p;
     phaseSince = Host::Time();
     endingSince = -1;
@@ -62,7 +66,11 @@ void Say(const string &in text, bool bad = false)
 
 void Notify(const string &in text)
 {
-    notice = text;
+    if (text == "" || (notices.length() > 0 && notices[notices.length() - 1] == text))
+        return;
+    if (notices.length() >= 4)
+        notices.removeAt(0);
+    notices.insertLast(text);
     Log::Info("notice: " + text);
 }
 
@@ -81,29 +89,8 @@ string VisibilityName(Together::LobbyType t)
     return "invite";
 }
 
-// A new code: 8 letters and digits that can't be mixed up, from the clock and this player, mixed many times (there is
-// no random source in the API; the code only has to be hard to guess from outside).
-string NewCode()
-{
-    uint h1 = 2166136261, h2 = 374761393;
-    string seed = "" + Host::Time() + "|" + Together::OwnId() + "|" + Together::LobbyId();
-    for (int round = 0; round < 64; round++)
-        for (uint i = 0; i < seed.length(); i++)
-        {
-            h1 = (h1 ^ seed[i]) * 16777619;
-            h2 = (h2 ^ (h1 >> 7)) * 2246822519;
-        }
-    string code;
-    for (int i = 0; i < 8; i++)
-    {
-        code += CODE_LETTERS.substr((i < 4 ? h1 : h2) % 32, 1);
-        if (i < 4)
-            h1 = h1 / 32 + h2 * 31;
-        else
-            h2 = h2 / 32 + h1 * 17;
-    }
-    return code;
-}
+// A new code: from the host's system random source (Together::NewSessionCode), nothing anyone could work out.
+string NewCode() { return Together::NewSessionCode(); }
 
 // --- starting ------------------------------------------------------------------------------------------------------
 
@@ -151,6 +138,7 @@ void JoinById(const string &in id, const string &in code = "")
 void Leave()
 {
     bool wasIn = phase != Idle;
+    string what = phase == Hosting ? "you ended the session" : (Busy() ? "cancelled" : "you left the session");
     bool editor = phase == Hosting || phase == Joined || phase == Connecting || phase == OpeningEditor;
     Together::HostNextEditor(false);
     Together::SetSessionCode("");
@@ -160,7 +148,7 @@ void Leave()
         Together::Leave();          // back to the main menu
     Set(Idle);
     if (wasIn)
-        Say("you left the session");
+        Say(what);
 }
 
 // --- every frame ---------------------------------------------------------------------------------------------------
@@ -172,14 +160,23 @@ void Update()
     // what the host DLL refused or ended (a save, a group, the host leaving...)
     string hostNotice = Together::TakeNotice();
     if (hostNotice != "")
+    {
         Notify(hostNotice);
+        if (phase == Joined || phase == Connecting || phase == JoiningLobby)
+            hostSaid = true;            // the generic "the session ended" isn't needed after the host's own reason
+    }
 
     // an invite accepted in Steam (or the command line Steam started the game with)
     string invite = Together::TakeInvite();
     if (invite != "")
     {
         if (phase == Hosting || phase == OpeningEditor)
-            Notify("you have an invite to another session: leave yours first (the together tab), then accept it again");
+            Notify("you have an invite to another session: end yours first (the together tab), then accept it again");
+        else if (phase == Idle && Editor::IsOpen())
+        {
+            pendingInvite = invite;     // the notice offers "join now": their own map's unsaved changes are theirs to keep
+            Notify("you have an invite to a session: save your map first, then press join now");
+        }
         else
         {
             if (InSession() || Busy())
@@ -238,8 +235,7 @@ void Update()
             openTab = true;
             Say(sessionCode != "" ? "hosting: code " + sessionCode : "hosting");
         }
-        else if (waited > 60 && Together::NetMode() != "listen server")
-            Fail("the editor didn't open as a session");
+        // no timeout: a new map waits for its name as long as the player takes (cancel backs out)
         break;
     case Hosting:
         if (!Together::IsHosting())
@@ -317,7 +313,15 @@ void Update()
             Fail("Steam didn't answer: try again");
         break;
     case Connecting:
-        if (Together::IsJoined() && Editor::IsOpen())
+        if (hostSaid && !Together::IsJoined())
+        {
+            hostSaid = false;
+            Together::LeaveLobby();
+            Together::SetJoinCode("");
+            Set(Idle);
+            Say("you couldn't join that session", true);
+        }
+        else if (Together::IsJoined() && Editor::IsOpen())
         {
             Set(Joined);
             openTab = true;
@@ -338,7 +342,9 @@ void Update()
                 if (Together::IsJoined())
                     Together::Leave();
                 Set(Idle);
-                Notify("the session ended: the host left, or the connection dropped");
+                if (!hostSaid)
+                    Notify("the session ended: the host left, or the connection dropped");
+                hostSaid = false;
             }
             return;
         }
@@ -360,7 +366,8 @@ void Fail(const string &in why)
         Together::Leave();
     Set(Idle);
     Say(why, true);
-    Notify(why);
+    if (!Page::win.IsTabOpen())         // on the page it's in red there already
+        Notify(why);
 }
 
 }  // namespace Session

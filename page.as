@@ -70,7 +70,7 @@ void Build()
     newButton.SetSize(220, 48);
     Primary(newButton);
     win.NewRow();
-    @codeInput = win.AddTextInput(300, "join with a code (8 letters)", 18);
+    @codeInput = win.AddTextInput(300, "session code", 18);
     codeInput.clearOnSubmit = false;
     @joinButton = win.AddButton("join");
     joinButton.SetSize(150, 44);
@@ -85,6 +85,7 @@ void Build()
     Secondary(cancelBusyButton);
 
     listView = win.StartView();
+    win.SetScrolling(listView, true);
     BuildListHeader();
 
     formView = win.StartView();
@@ -169,6 +170,7 @@ void FillForm()
         if (mapFiles[i] == last)
             mapChoice.selected = int(i);
     fromSaved.label = mapFiles.length() > 0 ? "one of my maps" : "one of my maps (none saved yet)";
+    fromSaved.SetTextColor(mapFiles.length() > 0 ? 1 : MUTED_R, mapFiles.length() > 0 ? 1 : MUTED_G, mapFiles.length() > 0 ? 1 : MUTED_B, 1);
     SetFrom(Storage::Get("from", "new") == "saved" && mapFiles.length() > 0);
 }
 
@@ -214,7 +216,10 @@ void ShowResults(bool force = false)
     int shown = 0;
     for (int i = 0; i < n; i++)
     {
-        string ver = Together::FoundData(i, "ver");
+        string ver = Together::FoundData(i, "vis") == "" ? "" : Together::FoundData(i, "ver");
+        string vis = Together::FoundData(i, "vis");
+        if (vis == "code" || vis == "invite")
+            continue;                   // never listed: found by their code, or joined by a Steam invite
         bool otherVersion = ver != "" && ver != VERSION;
         bool full = Together::FoundPlayers(i) >= Together::FoundMaxPlayers(i) && Together::FoundMaxPlayers(i) > 0;
         bool can = !otherVersion && !full && !busy;
@@ -226,7 +231,6 @@ void ShowResults(bool force = false)
         Muted(hostName);
         UI::Text@ count = win.AddText("" + Together::FoundPlayers(i) + "/" + Together::FoundMaxPlayers(i), 16);
         count.SetWidth(80);
-        string vis = Together::FoundData(i, "vis");
         UI::Text@ badge = win.AddText(otherVersion ? "needs " + ver : (full ? "full" : (Together::FoundIsFriend(i) || vis == "friends" ? "friends" : "public")), 14);
         if (otherVersion || full)
         {
@@ -283,6 +287,9 @@ void Update()
         Muted(statusText);
     }
     joinButton.label = busy ? BusyText() : "join";
+    refreshButton.label = searching ? "refreshing..." : "refresh";
+    if (Session::phase == Session::FindingCode)
+        searching = false;              // the session's code search owns the results now
     cancelBusyButton.visible = busy;
     newButton.visible = view == listView && !busy;
     if (busy != shownBusy)
@@ -291,14 +298,17 @@ void Update()
         ShowResults(true);              // cards can't be clicked while something is starting
     }
 
-    if (cancelBusyButton.Clicked())
+    // every click is read (and so used up) each frame: one made while busy doesn't fire later
+    bool cancelClicked = cancelBusyButton.Clicked(), joinClicked = joinButton.Clicked(), submitted = codeInput.Submitted(),
+         newClicked = newButton.Clicked(), refreshClicked = refreshButton.Clicked();
+    if (cancelClicked)
         Session::Leave();
-    if (!busy && (joinButton.Clicked() || codeInput.Submitted()))
+    if (!busy && (joinClicked || submitted))
     {
         Session::message = "";
         Session::JoinByCode(codeInput.text != "" ? codeInput.text : codeInput.typed);
     }
-    if (newButton.Clicked() && !busy)
+    if (newClicked && !busy)
     {
         Session::message = "";
         Show(formView);
@@ -306,7 +316,7 @@ void Update()
 
     if (view == listView)
     {
-        if ((refreshButton.Clicked() || Host::Time() >= nextSearch) && !busy && !searching)
+        if ((refreshClicked || Host::Time() >= nextSearch) && !busy && !searching)
             Search();
         if (searching && !Together::Searching())
         {
@@ -323,6 +333,8 @@ void Update()
     }
     else if (view == formView)
     {
+        if (Session::InSession())
+            Show(listView);             // the session started: the form is done
         if (cancelButton.Clicked())
             Show(listView);
         if (fromNew.Clicked())
@@ -331,7 +343,8 @@ void Update()
             SetFrom(true);
         whoHint.text = WHO_HINTS[uint(Clamp(whoChoice.selected, 0, 3))];
         createButton.label = busy ? BusyText() : "start the session";
-        if (createButton.Clicked() && !busy)
+        bool createClicked = createButton.Clicked();
+        if (createClicked && !busy)
         {
             int who = Clamp(whoChoice.selected, 0, 3), most = Clamp(maxChoice.selected, 0, 6);
             string file = fromSavedMap && mapChoice.selected >= 0 && uint(mapChoice.selected) < mapFiles.length() ? mapFiles[mapChoice.selected] : "";
