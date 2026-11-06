@@ -9,7 +9,7 @@
 //   vis (public / friends / code / invite), ch (a lookup key made from the code: never the code itself), and addr
 //   (where the editor is, set only once the editor listens; a joiner checks it is the lobby owner's).
 
-const string VERSION = "0.1.0";
+const string VERSION = "0.1.1";
 
 namespace Session
 {
