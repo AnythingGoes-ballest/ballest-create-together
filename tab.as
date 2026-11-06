@@ -17,7 +17,8 @@ namespace Tab
 UI::Window@ win, badge, noticeWin;
 UI::Text@ whoText, badgeText, noteText, statusText, noticeText, codeLabel;
 UI::TextInput@ codeBox;
-UI::Button@ inviteButton, leaveButton, noticeOk, noticeJoin;
+UI::Button@ inviteButton, leaveButton, noticeOk, noticeJoin, copyButton;
+double copyFlashEnd = 0;
 string shownPlayers = "-", shownCode = "-";
 int playersView;
 double confirmUntil = 0;
@@ -33,9 +34,12 @@ void Build()
     win.NewRow();
     @codeLabel = win.AddText("code", 15);
     Muted(codeLabel);
-    @codeBox = win.AddTextInput(190, "", 22);
+    @codeBox = win.AddTextInput(150, "", 20);
     codeBox.readOnly = true;
     codeBox.clearOnSubmit = false;
+    @copyButton = win.AddButton("copy");     // the code on the clipboard, to paste to friends
+    copyButton.SetSize(76, 36);
+    Secondary(copyButton);
     win.NewRow();
     @whoText = win.AddText("", 15);
     Muted(whoText);
@@ -126,18 +130,20 @@ void ShowNotice()
     if (any)
         noticeText.text = Session::notices[0] + (Session::notices.length() > 1 ? "  (" + Session::notices.length() + ")" : "");
     noticeWin.visible = any;
-    noticeJoin.visible = Session::pendingInvite != "";
+    bool onInvite = false;
+    if (any && Session::pendingInvite != "")
+        onInvite = Session::notices[0] == Session::inviteNotice;
+    noticeJoin.visible = onInvite;
     bool ok = noticeOk.Clicked(), join = noticeJoin.Clicked();
     if (any && (ok || join))
         Session::notices.removeAt(0);
-    if (join && Session::pendingInvite != "")
+    if (join && noticeJoin.visible)
+        Session::JoinInvite(Session::pendingInvite);
+    else if (ok && onInvite)
     {
-        string invite = Session::pendingInvite;
-        Session::pendingInvite = "";
-        Session::JoinById(invite);
+        Session::pendingInvite = "";    // "ok" on the invite turns it down
+        Session::inviteNotice = "";
     }
-    else if (ok && Session::notices.length() == 0)
-        Session::pendingInvite = "";
 }
 
 void Update()
@@ -167,22 +173,42 @@ void Update()
         shownCode = code + "|" + vis;
         codeBox.value = code;
         codeBox.visible = code != "";
-        codeLabel.text = code != "" ? "code" : (vis == "invite" ? "invite only: the host invites friends" :
-                                                (vis == "friends" ? "friends only: the host's Steam friends can join" :
-                                                                    "public: anyone can join from the create together list"));
+        copyButton.visible = code != "";
+        codeLabel.visible = code != "";     // without a code, the line below says what kind of session it is
+        codeLabel.text = "code";
     }
-    int players = Together::Players(), most = Together::LobbyMaxPlayers();
+    // the same count as the names below it (the lobby's members)
+    array<string>@ members = Together::LobbyMembers();
+    int most = Together::LobbyMaxPlayers();
+    int players = 0;
+    for (uint i = 0; i < members.length(); i++)
+        players++;
+    if (players == 0)
+        players = Together::Players();
     string kind = vis == "code" ? "code only" : (vis == "invite" ? "invite only" : (vis == "friends" ? "friends only" : (vis == "public" ? "public" : "")));
     whoText.text = (kind == "" ? "" : kind + " · ") + players + (most > 0 ? " of " + most : "") + " players";
     // the code stays in the tab: the badge is on screen (and on streams), so a code-only session's code isn't on it
     badgeText.text = (code != "" && vis != "code" ? "session " + code : "session") + " · " + players + (players == 1 ? " player" : " players") +
-                     (host ? " · you're the host" : " · hosted by " + Shorten(Together::LobbyData("host"), 24));
+                     (host ? " · you're the host" : " · hosted by " + Shorten(Session::HostName(), 24));
     ShowPlayers();
+    string shown = code;            // (TextInput.value can only be set)
+    if (copyButton.Clicked() && shown != "")
+    {
+        if (Host::SetClipboard(shown))
+            copyFlashEnd = Host::Time() + 2;
+        else
+            Session::Say("couldn't copy the code: select it and press Ctrl+C", true);
+    }
+    string copyLabel = "copy";
+    if (Host::Time() < copyFlashEnd)
+        copyLabel = "copied";
+    copyButton.label = copyLabel;
     if (inviteButton is null)
         return;
-    inviteButton.visible = Together::Backend() == "steam" && (host || vis == "friends" || vis == "public");
+    // the host's invites are let in whatever the kind (they're the host's friends); a joiner's only where anyone may join
+    inviteButton.visible = Together::Backend() == "steam" && (host || vis == "public");
     noteText.text = host ? "you're the host: the map is yours and only you can save it (save often). Ending the session sends everyone back to the menu."
-                         : "the map is " + Together::LobbyData("host") + "'s: only they can save or publish it. Your undo and redo are your own.";
+                         : "the map is " + Session::HostName() + "'s: only they can save or publish it. Your undo and redo are your own.";
     if (confirmUntil > 0)
     {
         statusText.text = "this ends the session for everyone; unsaved changes are lost";

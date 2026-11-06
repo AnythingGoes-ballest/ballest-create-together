@@ -231,7 +231,7 @@ void ShowResults(bool force = false)
         Muted(hostName);
         UI::Text@ count = win.AddText("" + Together::FoundPlayers(i) + "/" + Together::FoundMaxPlayers(i), 16);
         count.SetWidth(80);
-        UI::Text@ badge = win.AddText(otherVersion ? "needs " + ver : (full ? "full" : (Together::FoundIsFriend(i) || vis == "friends" ? "friends" : "public")), 14);
+        UI::Text@ badge = win.AddText(otherVersion ? "needs version " + ver : (full ? "full" : (vis == "friends" ? "friends only" : (Together::FoundIsFriend(i) ? "public · friend" : "public"))), 14);
         if (otherVersion || full)
         {
             Bad(badge);
@@ -283,15 +283,23 @@ void Update()
     }
     else
     {
-        statusText.text = Together::Backend() == "test" ? "test copy: sessions are shared between this computer's test copies only" : "";
-        Muted(statusText);
+        if (Together::Backend() == "none")
+        {
+            statusText.text = "Steam isn't running: sessions need Steam";
+            Bad(statusText);
+        }
+        else
+        {
+            statusText.text = Together::Backend() == "test" ? "test copy: sessions are shared between this computer's test copies only" : "";
+            Muted(statusText);
+        }
     }
     joinButton.label = busy ? BusyText() : "join";
     refreshButton.label = searching ? "refreshing..." : "refresh";
     if (Session::phase == Session::FindingCode)
         searching = false;              // the session's code search owns the results now
     cancelBusyButton.visible = busy;
-    newButton.visible = view == listView && !busy;
+    newButton.visible = view == listView && !busy && Together::Backend() != "none";
     if (busy != shownBusy)
     {
         shownBusy = busy;
@@ -336,7 +344,11 @@ void Update()
         if (Session::InSession())
             Show(listView);             // the session started: the form is done
         if (cancelButton.Clicked())
+        {
+            if (busy)
+                Session::Leave();       // the start is cancelled, not just hidden
             Show(listView);
+        }
         if (fromNew.Clicked())
             SetFrom(false);
         if (fromSaved.Clicked() && mapFiles.length() > 0)

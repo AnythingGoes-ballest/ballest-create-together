@@ -31,7 +31,9 @@ string message;                 // what happened last, for the page ("" for noth
 bool messageBad = false;
 double messageAt = 0;
 array<string> notices;          // what the player must see wherever they are (the notice window), oldest first
-string pendingInvite;           // an invite that came while the player was editing a map of their own
+string pendingInvite;           // an invite that came while the player was editing a map of their own, or hosting
+string inviteNotice;            // the notice that offers it ("join now" shows on that one only)
+string joinAfter;               // an invite to join once the player is back on the menu (after leaving a session)
 bool hostSaid = false;          // the host (DLL) already told the player why their session is over
 double phaseSince = 0;
 double endingSince = -1;        // the session looked over at this time (it must stay so for a moment)
@@ -45,6 +47,7 @@ string startMap;                // a saved map's file, or "" for a new map
 string sessionCode;             // the host's: shown to the host, its lookup key in the lobby
 string joinCode;
 string joinId;
+array<string> candidates;       // joining by code: the sessions whose lookup key matches, still to try
 
 void Set(Phase p)
 {
@@ -98,6 +101,9 @@ void StartHosting(Together::LobbyType type, int maxPlayers, const string &in map
 {
     if (Busy() || InSession())
         return;
+    pendingInvite = "";
+    inviteNotice = "";
+    joinAfter = "";
     startType = type;
     startMax = maxPlayers;
     startMap = mapFile;
@@ -120,6 +126,18 @@ void JoinByCode(const string &in typed)
     Say("looking for " + joinCode + "...");
     Together::FindLobbies(CodeKey(joinCode));
     Set(FindingCode);
+}
+
+// Joining by code: the next session whose key matched (the one whose host answers the code is the one).
+bool TryNextCandidate()
+{
+    if (candidates.length() == 0)
+        return false;
+    string id = candidates[0], code = joinCode;
+    candidates.removeAt(0);
+    Set(Idle);
+    JoinById(id, code);
+    return true;
 }
 
 void JoinById(const string &in id, const string &in code = "")
@@ -151,6 +169,13 @@ void Leave()
         Say(what);
 }
 
+// The host's name as Steam has it (the lobby's owner: its first member), not what the lobby's data says.
+string HostName()
+{
+    array<string>@ names = Together::LobbyMembers();
+    return names.length() > 0 ? names[0] : Together::LobbyData("host");
+}
+
 // --- every frame ---------------------------------------------------------------------------------------------------
 
 string Code() { return sessionCode; }
@@ -162,7 +187,7 @@ void Update()
     if (hostNotice != "")
     {
         Notify(hostNotice);
-        if (phase == Joined || phase == Connecting || phase == JoiningLobby)
+        if ((phase == Joined || phase == Connecting || phase == JoiningLobby) && hostNotice.findFirst("the host ") == 0)
             hostSaid = true;            // the generic "the session ended" isn't needed after the host's own reason
     }
 
@@ -170,23 +195,28 @@ void Update()
     string invite = Together::TakeInvite();
     if (invite != "")
     {
-        if (phase == Hosting || phase == OpeningEditor)
-            Notify("you have an invite to another session: end yours first (the together tab), then accept it again");
-        else if (phase == Idle && Editor::IsOpen())
+        if (phase == Hosting || phase == OpeningEditor || (phase == Idle && Editor::IsOpen()))
         {
-            pendingInvite = invite;     // the notice offers "join now": their own map's unsaved changes are theirs to keep
-            Notify("you have an invite to a session: save your map first, then press join now");
+            // the notice offers "join now": their own map's unsaved changes (and their session) are theirs to keep
+            pendingInvite = invite;
+            inviteNotice = phase == Idle ? "you have an invite to a session: save your map first, then press join now"
+                                         : "you have an invite to another session: save your map, then press join now to end yours and join";
+            Notify(inviteNotice);
         }
         else
-        {
-            if (InSession() || Busy())
-                Leave();
-            JoinById(invite);
-        }
+            JoinInvite(invite);
     }
 
-    // a non-error message fades after a while
-    if (message != "" && !messageBad && Host::Time() - messageAt > 10)
+    // an invite waiting for the player to be back on the menu
+    if (joinAfter != "" && phase == Idle && !Editor::IsOpen() && !Together::IsJoined() && !Together::IsHosting())
+    {
+        string id = joinAfter;
+        joinAfter = "";
+        JoinById(id);
+    }
+
+    // a non-error message fades after a while (not while something is under way: it says what to do)
+    if (message != "" && !messageBad && !Busy() && Host::Time() - messageAt > 10)
         message = "";
 
     string lobby = Together::LobbyState();
@@ -215,7 +245,7 @@ void Update()
                 return;
             }
             Set(OpeningEditor);             // first: opening a map is a long call
-            Say(startMap == "" ? "name your new map to start the session" : "opening the editor...");
+            Say(startMap == "" ? "name your new map in the game's dialog to start the session (cancel to stop)" : "opening the editor...");
             bool opened = startMap == "" ? Together::NewMap() : Together::OpenMap(startMap);
             if (!opened)
                 Fail("the editor couldn't be opened");
@@ -235,7 +265,12 @@ void Update()
             openTab = true;
             Say(sessionCode != "" ? "hosting: code " + sessionCode : "hosting");
         }
-        // no timeout: a new map waits for its name as long as the player takes (cancel backs out)
+        // a new map waits for its name as long as the player takes on the Create page; going elsewhere stops it, so
+        // nothing they open later is shared without them asking
+        else if (!Editor::IsOpen() && waited > 3 && !Page::win.IsTabOpen())
+            Fail("the session wasn't started (you left the create together page)");
+        else if (Editor::IsOpen() && waited > 30)
+            Fail("the editor didn't open as a session");
         break;
     case Hosting:
         if (!Together::IsHosting())
@@ -269,15 +304,17 @@ void Update()
         {
             int n = Together::FoundCount();
             string key = CodeKey(joinCode);
+            candidates.resize(0);
             for (int i = 0; i < n; i++)
                 if (Together::FoundData(i, "ch") == key)
                 {
-                    string code = joinCode;
-                    Set(Idle);
-                    JoinById(Together::FoundId(i), code);
-                    return;
+                    if (Together::FoundIsFriend(i))
+                        candidates.insertAt(0, Together::FoundId(i));      // a friend's first
+                    else
+                        candidates.insertLast(Together::FoundId(i));
                 }
-            Fail("no session has the code " + joinCode);
+            if (!TryNextCandidate())
+                Fail("no open session has the code " + joinCode + ": check it, or the session may be full");
         }
         else if (waited > 20)
             Fail("Steam didn't answer: try again");
@@ -302,8 +339,19 @@ void Update()
                 Fail("that session's address isn't its host's");
                 return;
             }
+            // by code: only a session whose host knows the code (it answers this player's proof)
+            if (joinCode != "" && !Together::CodeAccepted())
+            {
+                if (waited > 12)
+                {
+                    Together::LeaveLobby();
+                    if (!TryNextCandidate())
+                        Fail("that session didn't take the code " + joinCode + ": check it with the host");
+                }
+                return;
+            }
             Set(Connecting);                // first: the join starts the engine's connection inside the call
-            Say("connecting to " + Together::LobbyData("host") + "...");
+            Say("connecting to " + HostName() + "...");
             if (!Together::Join(addr))
                 Fail("couldn't connect to that session");
         }
@@ -325,7 +373,7 @@ void Update()
         {
             Set(Joined);
             openTab = true;
-            Say("joined " + Together::LobbyData("host") + "'s session");
+            Say("joined " + HostName() + "'s session");
         }
         else if (waited > 90)
             Fail("couldn't reach the host's editor");
@@ -355,6 +403,36 @@ void Update()
     }
 }
 
+// An invite: joined at once from the menu, or after leaving what the player is in (back on the menu first).
+void JoinInvite(const string &in id)
+{
+    pendingInvite = "";
+    inviteNotice = "";
+    if (InSession() || Busy() || Editor::IsOpen())
+    {
+        if (InSession() || Busy())
+            Leave();
+        else
+            Together::Leave();          // their own map, which they chose to leave
+        joinAfter = id;
+    }
+    else
+        JoinById(id);
+}
+
+// What Steam or the lobby said, in this plugin's words.
+string Words(const string &in why)
+{
+    string s = why;
+    int at = s.findFirst("lobby");
+    while (at >= 0)
+    {
+        s = s.substr(0, at) + "session" + s.substr(at + 5);
+        at = s.findFirst("lobby", at + 7);
+    }
+    return s;
+}
+
 void Fail(const string &in why)
 {
     bool editor = phase == Connecting || phase == OpeningEditor;
@@ -362,12 +440,12 @@ void Fail(const string &in why)
     Together::SetSessionCode("");
     Together::SetJoinCode("");
     Together::LeaveLobby();
-    if (editor && (Together::IsJoined() || Together::IsHosting()))
-        Together::Leave();
+    if (editor && (Together::IsJoined() || Together::IsHosting() || phase == Connecting))
+        Together::Leave();              // a join under way too (back to the menu)
     Set(Idle);
-    Say(why, true);
+    Say(Words(why), true);
     if (!Page::win.IsTabOpen())         // on the page it's in red there already
-        Notify(why);
+        Notify(Words(why));
 }
 
 }  // namespace Session

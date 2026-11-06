@@ -42,8 +42,9 @@ string Upper(const string &in text)
 }
 
 // Codes: eight letters and digits that can't be mixed up (no 0/O, 1/I). A session's code is a secret the host makes
-// (Session::NewCode); the lobby carries only CodeKey(code), a lookup key that is slow to make on purpose, so guessing a
-// code from it costs a lot more than trying codes one by one.
+// (Session::NewCode); the lobby carries only CodeKey(code), a short lookup key: about a million codes share each key,
+// so it narrows a search but can't tell anyone the code. Which of the sessions found is the one is the host's to show
+// (Together::CodeAccepted: it answers a joiner's proof with one of its own, which only a host that knows the code can make).
 const string CODE_LETTERS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 string CodeKey(const string &in code)
 {
@@ -56,8 +57,8 @@ string CodeKey(const string &in code)
             h2 = (h2 ^ h1) * 668265263 + uint(round);
         }
     string hex = "0123456789abcdef", key;
-    for (int i = 0; i < 8; i++)
-        key += hex.substr(((i < 4 ? h1 : h2) >> (8 * (i % 4))) & 15, 1) + hex.substr(((i < 4 ? h1 : h2) >> (8 * (i % 4) + 4)) & 15, 1);
+    for (int i = 0; i < 5; i++)         // 20 bits
+        key += hex.substr((h2 >> (4 * i)) & 15, 1);
     return key;
 }
 
