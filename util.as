@@ -15,6 +15,11 @@ void Lime(UI::Text@ t) { t.SetColor(LIME_R, LIME_G, LIME_B, 1); }
 void Bad(UI::Text@ t) { t.SetColor(BAD_R, BAD_G, BAD_B, 1); }
 void Primary(UI::Button@ b) { b.SetBackground(PRIMARY_R, PRIMARY_G, PRIMARY_B, 1); }
 void Secondary(UI::Button@ b) { b.SetBackground(BUTTON_R, BUTTON_G, BUTTON_B, 1); }
+// A dropdown in the windows' dark style (its own default is light grey).
+void Dark(UI::Dropdown@ d)
+{
+    d.SetStyle(BUTTON_R, BUTTON_G, BUTTON_B, 1, 0.045f, 0.052f, 0.07f, 0.9f, 0.9f, 0.92f, SELECTED_R, SELECTED_G, SELECTED_B);
+}
 void Chosen(UI::Button@ b, bool on) { b.SetBackground(on ? SELECTED_R : BUTTON_R, on ? SELECTED_G : BUTTON_G, on ? SELECTED_B : BUTTON_B, 1); }
 
 string Trim(const string &in text)
@@ -36,24 +41,24 @@ string Upper(const string &in text)
     return t;
 }
 
-// A lobby's code: six letters and digits that can't be mixed up (no 0/O, 1/I), made from the lobby's id so every
-// player who sees the lobby sees the same code.
+// Codes: eight letters and digits that can't be mixed up (no 0/O, 1/I). A session's code is a secret the host makes
+// (Session::NewCode); the lobby carries only CodeKey(code), a lookup key that is slow to make on purpose, so guessing a
+// code from it costs a lot more than trying codes one by one.
 const string CODE_LETTERS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-string CodeFor(const string &in id)
+string CodeKey(const string &in code)
 {
-    uint h = 2166136261;
-    for (uint i = 0; i < id.length(); i++)
-    {
-        h ^= id[i];
-        h *= 16777619;
-    }
-    string code;
-    for (int i = 0; i < 6; i++)
-    {
-        code += CODE_LETTERS.substr(h % 32, 1);
-        h = h / 32 + (h % 7) * 99991 + uint(i) * 131;
-    }
-    return code;
+    uint h1 = 2166136261, h2 = 3266489917;
+    string text = "create-together|" + code;
+    for (int round = 0; round < 1500; round++)
+        for (uint i = 0; i < text.length(); i++)
+        {
+            h1 = (h1 ^ text[i]) * 16777619;
+            h2 = (h2 ^ h1) * 668265263 + uint(round);
+        }
+    string hex = "0123456789abcdef", key;
+    for (int i = 0; i < 8; i++)
+        key += hex.substr(((i < 4 ? h1 : h2) >> (8 * (i % 4))) & 15, 1) + hex.substr(((i < 4 ? h1 : h2) >> (8 * (i % 4) + 4)) & 15, 1);
+    return key;
 }
 
 // What a typed code becomes: upper case, spaces and dashes left out.
@@ -80,7 +85,13 @@ string MapTitle(const string &in file)
     return name;
 }
 
+// At most `most` bytes, cut at a whole character (a name's multi-byte characters stay whole).
 string Shorten(const string &in text, uint most)
 {
-    return text.length() <= most ? text : text.substr(0, most - 1) + "…";
+    if (text.length() <= most)
+        return text;
+    uint end = most - 1;
+    while (end > 0 && (uint8(text[end]) & 0xC0) == 0x80)
+        end--;
+    return text.substr(0, end) + "…";
 }

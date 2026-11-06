@@ -1,21 +1,26 @@
 // In the editor during a session: a "together" tab in the left panel (Window.DockInEditorTab) and a small badge at
 // the top of the screen, so everyone always sees that they're in a session and its code.
 //   together
-//   code  K7QX2M                (what friends type on the create together page)
+//   code  [K7QX2M4P]            (selectable: friends type it on the create together page)
 //   public · 3 of 4 players
-//     obamanomicon (host)
-//     friend one
-//   [invite friends]            (Steam's own invite dialog: hosts only)
-//   [leave session]
+//   players
+//     ★ obamanomicon (host)
+//       friend one (you)
+//   [invite friends]            (Steam's own invite dialog)
+//   [leave session]             (the host: click twice, it ends the session for everyone)
+//   (a note on who owns the map, and the last message)
+// Plus the notice window: whatever ended or was refused (the host left, a save refused...), wherever the player is.
 
 namespace Tab
 {
 
-UI::Window@ win, badge;
-UI::Text@ codeText, whoText, playersText, badgeText, noteText;   // playersText: unused spare row
-UI::Button@ inviteButton, leaveButton;
-string shownPlayers = "-";
+UI::Window@ win, badge, noticeWin;
+UI::Text@ whoText, badgeText, noteText, statusText, noticeText, codeLabel;
+UI::TextInput@ codeBox;
+UI::Button@ inviteButton, leaveButton, noticeOk;
+string shownPlayers = "-", shownCode = "-";
 int playersView;
+double confirmUntil = 0;
 
 void Build()
 {
@@ -26,31 +31,18 @@ void Build()
     win.StartHeader();
     win.AddText("together", 26);
     win.NewRow();
-    Muted(win.AddText("code", 15));
-    @codeText = win.AddText("", 30);
-    Lime(codeText);
+    @codeLabel = win.AddText("code", 15);
+    Muted(codeLabel);
+    @codeBox = win.AddTextInput(190, "", 22);
+    codeBox.readOnly = true;
+    codeBox.clearOnSubmit = false;
     win.NewRow();
     @whoText = win.AddText("", 15);
     Muted(whoText);
     win.NewRow();
-    @playersText = win.AddText("", 15);
-    win.NewRow();
-    @inviteButton = win.AddButton("invite friends");
-    inviteButton.SetSize(300, 44);
-    Primary(inviteButton);
-    win.NewRow();
-    @leaveButton = win.AddButton("leave session");
-    leaveButton.SetSize(300, 44);
-    Secondary(leaveButton);
-    win.NewRow();
-    @noteText = win.AddText("", 13);
-    noteText.SetWidth(320);
-    noteText.SetWrap(true);
-    Muted(noteText);
-    win.NewRow();
     Muted(win.AddText("players", 15));
-    playersView = win.StartView();      // last: ClearView empties only the players
-    win.ShowView(playersView);
+    playersView = win.StartView();      // the players: rebuilt when they change
+    win.ShowView(playersView);          // the players, then the session's buttons and notes (ShowPlayers)
     win.visible = false;
 
     @badge = UI::CreateWindow();
@@ -62,51 +54,148 @@ void Build()
     badge.SetPadding(14, 6);
     @badgeText = badge.AddText("", 15);
     badge.visible = false;
+
+    @noticeWin = UI::CreateWindow();
+    noticeWin.SetAnchor(0.5f, 0.42f);
+    noticeWin.SetPivot(0.5f, 0.5f);
+    noticeWin.SetBackground(CARD_R, CARD_G, CARD_B, 0.97f);
+    noticeWin.SetCornerRadius(10);
+    noticeWin.SetPadding(24, 18);
+    noticeWin.SetBlocksClicks(true);
+    noticeWin.zOrder = 60;
+    Lime(noticeWin.AddText("create together", 20));
+    noticeWin.NewRow();
+    @noticeText = noticeWin.AddText("", 16);
+    noticeText.SetWidth(460);
+    noticeText.SetWrap(true);
+    noticeWin.NewRow();
+    noticeWin.AddSpace(0);
+    @noticeOk = noticeWin.AddButton("ok");
+    noticeOk.SetSize(110, 42);
+    Primary(noticeOk);
+    noticeWin.visible = false;
 }
 
 void ShowPlayers()
 {
     array<string>@ names = Together::LobbyMembers();
+    array<string>@ ids = Together::LobbyMemberIds();
+    string own = Together::OwnId(), owner = Together::LobbyOwnerId();
     string key = "";
     for (uint i = 0; i < names.length(); i++)
-        key += names[i] + "|";
+        key += names[i] + (i < ids.length() ? ids[i] : "") + "|";
     if (key == shownPlayers)
         return;
     shownPlayers = key;
     win.ClearView(playersView);
     for (uint i = 0; i < names.length(); i++)
     {
-        UI::Text@ t = win.AddText((i == 0 ? "★ " : "  ") + Shorten(names[i], 28) + (i == 0 ? "  (host)" : ""), 16);
-        if (i == 0)
+        bool isHost = i < ids.length() && ids[i] == owner, isYou = i < ids.length() && ids[i] == own;
+        UI::Text@ t = win.AddText((isHost ? "★ " : "   ") + Shorten(names[i], 26) + (isHost ? "  (host)" : "") + (isYou ? "  (you)" : ""), 16);
+        if (isHost)
             Lime(t);
         win.NewRow();
+    }
+    // the session's buttons and notes come after the players (in the same view, rebuilt with them)
+    win.NewRow();
+    @inviteButton = win.AddButton("invite friends");
+    inviteButton.SetSize(300, 44);
+    Primary(inviteButton);
+    win.NewRow();
+    @leaveButton = win.AddButton(Session::phase == Session::Hosting ? "end the session" : "leave the session");
+    leaveButton.SetSize(300, 44);
+    Secondary(leaveButton);
+    win.NewRow();
+    @noteText = win.AddText("", 13);
+    noteText.SetWidth(320);
+    noteText.SetWrap(true);
+    Muted(noteText);
+    win.NewRow();
+    @statusText = win.AddText("", 13);
+    statusText.SetWidth(320);
+    statusText.SetWrap(true);
+}
+
+void ShowNotice()
+{
+    if (Session::notice != "" && !noticeWin.visible)
+    {
+        noticeText.text = Session::notice;
+        noticeWin.visible = true;
+    }
+    if (noticeWin.visible && noticeOk.Clicked())
+    {
+        noticeWin.visible = false;
+        Session::notice = "";
     }
 }
 
 void Update()
 {
+    ShowNotice();
     bool on = Session::InSession() && Editor::IsOpen();
     win.visible = on;
     badge.visible = on && !Editor::IsTesting();
     if (!on)
+    {
+        shownPlayers = "-";
         return;
-    string code = Session::Code();
+    }
+    if (Session::openTab)
+    {
+        Session::openTab = false;
+        win.OpenTab();
+    }
     bool host = Session::phase == Session::Hosting;
     string vis = Together::LobbyData("vis");
+    string code = host ? Session::Code() : "";
+    // a joiner sees the code only if it's one they can share: a public session's or a code-only one they used
+    if (!host && (vis == "public" || vis == "code"))
+        code = Session::joinCode;
+    if (code != shownCode)
+    {
+        shownCode = code;
+        codeBox.value = code;
+        codeBox.visible = code != "";
+        codeLabel.text = code != "" ? "code" : (vis == "invite" ? "invite only: the host invites friends" :
+                                                (vis == "friends" ? "friends only: the host's Steam friends can join" :
+                                                                    "public: anyone can join from the create together list"));
+    }
     int players = Together::Players(), most = Together::LobbyMaxPlayers();
-    codeText.text = vis == "invite" ? "invite only" : code;
     whoText.text = (vis == "" ? "" : vis + " · ") + players + (most > 0 ? " of " + most : "") + " players";
-    badgeText.text = "together · " + (vis == "invite" ? "invite only" : code) + " · " + players + (players == 1 ? " player" : " players") +
-                     (host ? "" : " · " + Shorten(Together::LobbyData("host"), 18) + "'s map");
-    inviteButton.visible = Together::Backend() == "steam";
-    noteText.text = host ? "you're the host: the map is yours, only you can save it. When you leave, the session ends for everyone."
-                         : "the map is " + Together::LobbyData("host") + "'s: only they can save or publish it.";
-    if (win.IsTabOpen())
-        ShowPlayers();
+    badgeText.text = (code != "" ? "session " + code : "session") + " · " + players + (players == 1 ? " player" : " players") +
+                     (host ? " · you're the host" : " · hosted by " + Shorten(Together::LobbyData("host"), 24));
+    ShowPlayers();
+    if (inviteButton is null)
+        return;
+    inviteButton.visible = Together::Backend() == "steam" && (host || vis == "friends" || vis == "public");
+    noteText.text = host ? "you're the host: the map is yours and only you can save it (save often). Ending the session sends everyone back to the menu."
+                         : "the map is " + Together::LobbyData("host") + "'s: only they can save or publish it. Your undo and redo are your own.";
+    statusText.text = Session::message;
+    if (Session::messageBad)
+        Bad(statusText);
+    else
+        Muted(statusText);
     if (inviteButton.Clicked() && !Together::InviteDialog())
         Session::Say("Steam's invite dialog isn't available here", true);
+    if (host && confirmUntil > 0 && Host::Time() > confirmUntil)
+    {
+        confirmUntil = 0;
+        leaveButton.label = "end the session";
+    }
     if (leaveButton.Clicked())
-        Session::Leave();
+    {
+        if (host && confirmUntil == 0)
+        {
+            confirmUntil = Host::Time() + 4;
+            leaveButton.label = "click again: ends it for everyone (unsaved changes are lost)";
+        }
+        else
+        {
+            confirmUntil = 0;
+            Session::Leave();
+        }
+    }
 }
 
 }  // namespace Tab

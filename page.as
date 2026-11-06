@@ -1,9 +1,9 @@
 // The "create together" page in the Create menu (Window.DockInCreatePage: a label after "files" and "published"):
 //   create together                                   [+ new session]
 //   [ join with a code          ] [join]
-//   (what happened last)
+//   (what's happening, or what happened last)          [cancel]  (while joining or starting)
 //   open sessions                                      [refresh]
-//     [ lowpoly city        obamanomicon      2/4   friend ]   a click joins
+//     [ lowpoly city        obamanomicon      2/4   friends ]   a click joins
 //   ...
 // "+ new session" shows the form: start from a new map or one of your saved maps, who can join, how many players.
 
@@ -14,7 +14,7 @@ const float WIDTH = 1000;
 
 UI::Window@ win;
 int listView, formView;
-UI::Button@ newButton, joinButton, refreshButton, backButton;
+UI::Button@ newButton, joinButton, cancelBusyButton, refreshButton;
 UI::TextInput@ codeInput;
 UI::Text@ statusText, listTitle;
 
@@ -22,23 +22,24 @@ UI::Text@ statusText, listTitle;
 array<int> cards;
 array<string> cardIds;
 double nextSearch = 0;
-bool searching = false;
+bool searching = false, searchedOnce = false;
 string shownResults = "-";
+bool shownBusy = false;
 
 // the form
 UI::Button@ fromNew, fromSaved, createButton, cancelButton;
 UI::Dropdown@ mapChoice, whoChoice, maxChoice;
-UI::Text@ whoHint;
+UI::Text@ whoHint, fromHint;
 array<string> mapFiles;
 bool fromSavedMap = false;
 int view = -1;
 
 const array<string> WHO_LABELS = {"public: everyone's list", "friends: your Steam friends", "code only: anyone with the code", "invite only: Steam invites"};
 const array<string> WHO_HINTS = {
-    "listed for everyone on the create together page",
-    "your Steam friends see it in their list",
-    "not listed: share the code to let people in",
-    "not listed and no code: invite friends through Steam from the editor"};
+    "listed for everyone on the create together page; anyone can join, or use its code",
+    "your Steam friends see it in their list; only your friends can join",
+    "not listed: share the code (shown in the editor's together tab); only people with the code can join",
+    "not listed and no code: invite friends from the editor's together tab; only your friends can join"};
 
 Together::LobbyType TypeAt(int i)
 {
@@ -50,6 +51,8 @@ Together::LobbyType TypeAt(int i)
         return Together::Code;
     return Together::InviteOnly;
 }
+
+int Clamp(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
 void Build()
 {
@@ -67,62 +70,75 @@ void Build()
     newButton.SetSize(220, 48);
     Primary(newButton);
     win.NewRow();
-    @codeInput = win.AddTextInput(300, "join with a code", 18);
+    @codeInput = win.AddTextInput(300, "join with a code (8 letters)", 18);
     codeInput.clearOnSubmit = false;
     @joinButton = win.AddButton("join");
-    joinButton.SetSize(110, 44);
+    joinButton.SetSize(150, 44);
     Secondary(joinButton);
     win.NewRow();
     @statusText = win.AddText("", 15);
-    statusText.SetWidth(WIDTH);
+    statusText.SetWidth(WIDTH - 180);
     statusText.SetWrap(true);
+    win.AddSpace(0);
+    @cancelBusyButton = win.AddButton("cancel");
+    cancelBusyButton.SetSize(130, 40);
+    Secondary(cancelBusyButton);
 
     listView = win.StartView();
-    @listTitle = win.AddText("open sessions", 22);
-    win.AddSpace(0);
-    @refreshButton = win.AddButton("refresh");
-    refreshButton.SetSize(130, 40);
-    Secondary(refreshButton);
-    win.NewRow();
+    BuildListHeader();
 
     formView = win.StartView();
     BuildForm();
     Show(listView);
 }
 
+void BuildListHeader()
+{
+    @listTitle = win.AddText("open sessions", 22);
+    win.AddSpace(0);
+    @refreshButton = win.AddButton("refresh");
+    refreshButton.SetSize(130, 40);
+    Secondary(refreshButton);
+    win.NewRow();
+}
+
 void BuildForm()
 {
     win.AddText("new session", 22);
-    win.AddSpace(0);
-    @backButton = win.AddButton("back");
-    backButton.SetSize(110, 40);
-    Secondary(backButton);
     win.NewRow();
     Muted(win.AddText("start from", 15));
     win.NewRow();
     @fromNew = win.AddButton("a new map");
     fromNew.SetSize(220, 44);
     @fromSaved = win.AddButton("one of my maps");
-    fromSaved.SetSize(220, 44);
+    fromSaved.SetSize(300, 44);
+    win.NewRow();
+    @fromHint = win.AddText("", 14);
+    Muted(fromHint);
     win.NewRow();
     @mapChoice = win.AddDropdown(560);
+    Dark(mapChoice);
     win.NewRow();
     Muted(win.AddText("who can join", 15));
     win.NewRow();
     @whoChoice = win.AddDropdown(560);
+    Dark(whoChoice);
     for (uint i = 0; i < WHO_LABELS.length(); i++)
         whoChoice.AddOption(WHO_LABELS[i]);
-    whoChoice.selected = parseInt(Storage::Get("who", "0"));
+    whoChoice.selected = Clamp(parseInt(Storage::Get("who", "0")), 0, 3);
     win.NewRow();
     @whoHint = win.AddText("", 14);
+    whoHint.SetWidth(WIDTH - 60);
+    whoHint.SetWrap(true);
     Muted(whoHint);
     win.NewRow();
     Muted(win.AddText("players", 15));
     win.NewRow();
     @maxChoice = win.AddDropdown(200);
+    Dark(maxChoice);
     for (int n = 2; n <= 8; n++)
         maxChoice.AddOption("" + n + " players");
-    maxChoice.selected = parseInt(Storage::Get("max", "2"));
+    maxChoice.selected = Clamp(parseInt(Storage::Get("max", "2")), 0, 6);
     win.NewRow();
     @createButton = win.AddButton("start the session");
     createButton.SetSize(260, 50);
@@ -136,7 +152,6 @@ void Show(int v)
 {
     view = v;
     win.ShowView(v);
-    newButton.visible = v == listView;
     if (v == formView)
         FillForm();
     else
@@ -153,6 +168,7 @@ void FillForm()
     for (uint i = 0; i < mapFiles.length(); i++)
         if (mapFiles[i] == last)
             mapChoice.selected = int(i);
+    fromSaved.label = mapFiles.length() > 0 ? "one of my maps" : "one of my maps (none saved yet)";
     SetFrom(Storage::Get("from", "new") == "saved" && mapFiles.length() > 0);
 }
 
@@ -162,6 +178,7 @@ void SetFrom(bool saved)
     Chosen(fromNew, !saved);
     Chosen(fromSaved, saved);
     mapChoice.visible = saved;
+    fromHint.text = saved ? "the session opens your map; only you can save it" : "the game asks you to name it first, then the session starts";
 }
 
 // --- the list ------------------------------------------------------------------------------------------------------
@@ -173,30 +190,35 @@ void Search()
     nextSearch = Host::Time() + 6;
 }
 
-void ShowResults()
+void ShowResults(bool force = false)
 {
     int n = Together::FoundCount();
-    string key;
+    bool busy = Session::Busy();
+    string key = busy ? "b" : "";
     for (int i = 0; i < n; i++)
-        key += Together::FoundId(i) + Together::FoundData(i, "map") + Together::FoundPlayers(i) + "|";
-    if (key == shownResults)
+        key += Together::FoundId(i) + Together::FoundData(i, "map") + Together::FoundPlayers(i) + Together::FoundData(i, "ver") + "|";
+    if (!searchedOnce)
+        key = "-";
+    if (key == shownResults && !force)
         return;
     shownResults = key;
     win.ClearView(listView);
     cards.resize(0);
     cardIds.resize(0);
-    @listTitle = win.AddText("open sessions", 22);
-    win.AddSpace(0);
-    @refreshButton = win.AddButton("refresh");
-    refreshButton.SetSize(130, 40);
-    Secondary(refreshButton);
-    win.NewRow();
+    BuildListHeader();
+    if (!searchedOnce)
+    {
+        Muted(win.AddText("looking for sessions...", 15));
+        return;
+    }
     int shown = 0;
     for (int i = 0; i < n; i++)
     {
-        if (Together::FoundData(i, "ver") != VERSION && Together::FoundData(i, "ver") != "")
-            continue;               // another version of the plugin: can't join it
-        int card = win.StartCard(true);
+        string ver = Together::FoundData(i, "ver");
+        bool otherVersion = ver != "" && ver != VERSION;
+        bool full = Together::FoundPlayers(i) >= Together::FoundMaxPlayers(i) && Together::FoundMaxPlayers(i) > 0;
+        bool can = !otherVersion && !full && !busy;
+        int card = win.StartCard(can);
         UI::Text@ mapName = win.AddText(Shorten(Together::FoundData(i, "map"), 34), 20);
         mapName.SetWidth(430);
         UI::Text@ hostName = win.AddText(Shorten(Together::FoundData(i, "host"), 26), 16);
@@ -204,16 +226,22 @@ void ShowResults()
         Muted(hostName);
         UI::Text@ count = win.AddText("" + Together::FoundPlayers(i) + "/" + Together::FoundMaxPlayers(i), 16);
         count.SetWidth(80);
-        bool full = Together::FoundPlayers(i) >= Together::FoundMaxPlayers(i) && Together::FoundMaxPlayers(i) > 0;
-        UI::Text@ badge = win.AddText(full ? "full" : (Together::FoundIsFriend(i) ? "friend" : "public"), 14);
-        if (full)
+        string vis = Together::FoundData(i, "vis");
+        UI::Text@ badge = win.AddText(otherVersion ? "needs " + ver : (full ? "full" : (Together::FoundIsFriend(i) || vis == "friends" ? "friends" : "public")), 14);
+        if (otherVersion || full)
+        {
             Bad(badge);
+            Muted(mapName);
+        }
         else
             Lime(badge);
         win.AddSpace(0);
         win.EndCard();
-        cards.insertLast(card);
-        cardIds.insertLast(Together::FoundId(i));
+        if (can)
+        {
+            cards.insertLast(card);
+            cardIds.insertLast(Together::FoundId(i));
+        }
         shown++;
     }
     if (shown == 0)
@@ -223,10 +251,24 @@ void ShowResults()
     }
 }
 
+string BusyText()
+{
+    switch (Session::phase)
+    {
+    case Session::CreatingLobby: return "starting...";
+    case Session::OpeningEditor: return "starting...";
+    case Session::FindingCode: return "finding...";
+    case Session::JoiningLobby: return "joining...";
+    case Session::Connecting: return "connecting...";
+    }
+    return "";
+}
+
 void Update()
 {
     if (!win.IsTabOpen())
         return;
+    bool busy = Session::Busy();
     if (Session::message != "")
     {
         statusText.text = Session::message;
@@ -236,48 +278,69 @@ void Update()
             Muted(statusText);
     }
     else
+    {
         statusText.text = Together::Backend() == "test" ? "test copy: sessions are shared between this computer's test copies only" : "";
-    bool busy = Session::Busy();
-    joinButton.visible = !busy;
+        Muted(statusText);
+    }
+    joinButton.label = busy ? BusyText() : "join";
+    cancelBusyButton.visible = busy;
     newButton.visible = view == listView && !busy;
+    if (busy != shownBusy)
+    {
+        shownBusy = busy;
+        ShowResults(true);              // cards can't be clicked while something is starting
+    }
 
-    if (joinButton.Clicked() || codeInput.Submitted())
+    if (cancelBusyButton.Clicked())
+        Session::Leave();
+    if (!busy && (joinButton.Clicked() || codeInput.Submitted()))
+    {
+        Session::message = "";
         Session::JoinByCode(codeInput.text != "" ? codeInput.text : codeInput.typed);
-    if (newButton.Clicked())
+    }
+    if (newButton.Clicked() && !busy)
+    {
+        Session::message = "";
         Show(formView);
+    }
 
     if (view == listView)
     {
-        if (refreshButton.Clicked() || Host::Time() >= nextSearch)
+        if ((refreshButton.Clicked() || Host::Time() >= nextSearch) && !busy && !searching)
             Search();
         if (searching && !Together::Searching())
         {
             searching = false;
+            searchedOnce = true;
             ShowResults();
         }
         for (uint i = 0; i < cards.length(); i++)
             if (win.CardClicked(cards[i]))
+            {
+                Session::message = "";
                 Session::JoinById(cardIds[i]);
+            }
     }
     else if (view == formView)
     {
-        if (backButton.Clicked() || cancelButton.Clicked())
+        if (cancelButton.Clicked())
             Show(listView);
         if (fromNew.Clicked())
             SetFrom(false);
         if (fromSaved.Clicked() && mapFiles.length() > 0)
             SetFrom(true);
-        whoHint.text = WHO_HINTS[uint(whoChoice.selected) < WHO_HINTS.length() ? whoChoice.selected : 0];
-        createButton.visible = !busy;
-        if (createButton.Clicked())
+        whoHint.text = WHO_HINTS[uint(Clamp(whoChoice.selected, 0, 3))];
+        createButton.label = busy ? BusyText() : "start the session";
+        if (createButton.Clicked() && !busy)
         {
+            int who = Clamp(whoChoice.selected, 0, 3), most = Clamp(maxChoice.selected, 0, 6);
             string file = fromSavedMap && mapChoice.selected >= 0 && uint(mapChoice.selected) < mapFiles.length() ? mapFiles[mapChoice.selected] : "";
             Storage::Set("from", fromSavedMap ? "saved" : "new");
             if (file != "")
                 Storage::Set("map", file);
-            Storage::Set("who", "" + whoChoice.selected);
-            Storage::Set("max", "" + maxChoice.selected);
-            Session::StartHosting(TypeAt(whoChoice.selected), maxChoice.selected + 2, file);
+            Storage::Set("who", "" + who);
+            Storage::Set("max", "" + most);
+            Session::StartHosting(TypeAt(who), most + 2, file);
         }
     }
 }
